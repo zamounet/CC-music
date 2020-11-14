@@ -1,4 +1,4 @@
-  local currentPath = "CC-music/"
+edtilocal currentPath = "CC-music/"
 
 do
 	local requireCache = {}
@@ -157,7 +157,7 @@ local function PlayNote(note, layer, instruments, noteblock)
     -- 0 is 2 blocks right, 100 is center, 200 is 2 blocks left.
     
     -- Pitch source https://minecraft.gamepedia.com/Note_Block
-    noteblock.PlaySound(instruments[tostring(note.instrument)], math.pow(2, (note.pitch - 12) / 12), layer.layer_volume, 0, 0, 0)
+    noteblock.playSound(instruments[tostring(note.instrument)], math.pow(2, ((note.key - 33) - 12) / 12), layer.layer_volume, 0, 0, 0)
 end
 
 local function PlayTick(tick, layers, instruments, noteblock)
