@@ -1,4 +1,4 @@
-  local currentPath = "./"
+  local currentPath = "CC-music/"
 
 do
 	local requireCache = {}
@@ -199,12 +199,11 @@ if not noteblock then
     error("No noteblock detected")
 end
 
-local json = require("json")
 local arg = {...}
 local song = {}
 
 local song_handle = fs.open(arg[1], "rb")
-local instruments_handle = fs.open("instrument_const.json", "r")
+local instruments_handle = fs.open(currentPath .. "instrument_const.json", "r")
 
 song.header = GetHeaderInfo(song_handle)
 song.notes = GetNotes(song_handle)
