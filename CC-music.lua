@@ -1,158 +1,217 @@
-local HEAD = 0
-local LAYER_OFFSET = 0x4
-local OP_LENGTH  = 0x4
-local OCTAL_OFFSET = 0x21
-local LENGTH_OFFSET = 0x4
-local FILENAME_OFFSET = 0x35
-local FILENAME_LENGTH_OFFSET = 0x31
+  local currentPath = "./"
 
-local function read(handle)
-    HEAD = HEAD + 1
-    return handle.read()
-end
+do
+	local requireCache = {}
+	
+	function require(file, global)
+		global = global or false
+		local absolute = file
+		
+		if global == false then
+			absolute = currentPath .. file
+        end
+        if requireCache[absolute] ~= nil then
+          --# Lucky day, this file has already been loaded once!
+          --# Return its cached result.
+          return requireCache[absolute]
+        end
 
-local function ReadByte(handle)
-    local byte = read(handle)
-    local hex= string.format("%x", byte)
-    return tonumber(hex)
+        --# Create a custom environment so that loaded
+        --# source files also have access to require.
+        local env = {
+          require = require
+        }
+
+        setmetatable(env, { __index = _G, __newindex = _G })
+
+        --# Load the source file with loadfile, which
+        --# also allows us to pass our custom environment.
+        local chunk, err = loadfile(absolute, env)
+
+        --# If chunk is nil, then there was a syntax error
+        --# or the file does not exist.
+        if chunk == nil then
+          return error(err)
+        end
+
+        --# Execute the file, cache and return its return value.
+        local result = chunk()
+        requireCache[absolute] = result
+        return result
+  end
 end
+local json = require("json")
 
 local function ReadBytesToDec(handle, bytesToRead)
     local number = 0
     for i=1, bytesToRead do
-        local byte = read(handle)
+        local byte = handle.read()
         if i == 1 then byte = byte else byte = (byte * math.pow(256, (i-1)) ) end
         number = number + byte
     end
     return number
 end
 
-local function SkipBytes(handle, offset)
-    for i=1, tonumber(offset) do
-        read(handle)
-    end
+local function ReadByte(handle)
+    return ReadBytesToDec(handle, 1)
 end
 
-local function DecToHex(number)
-    local hex_string = string.format("%x", number)
-    return tonumber(hex_string)
+local function ReadShort(handle)
+    return ReadBytesToDec(handle, 2)
+end
+
+local function ReadInt(handle)
+    return ReadBytesToDec(handle, 4)
+end
+
+local function ReadString(handle)
+    local string_length = ReadInt(handle)
+    local string = ""
+
+    for i=1, string_length do
+        local byte = handle.read()
+        string = string .. string.char(byte)
+    end
+    return string
 end
 
 local function GetHeaderInfo(handle)
     local header_info = {}
-
-    --song tick length
-    SkipBytes(handle, LENGTH_OFFSET)
-    header_info.tick_length = ReadBytesToDec(handle, 2)
     
-    
-    --song title length
-    local song_title_length = 0
-    SkipBytes(handle, FILENAME_LENGTH_OFFSET - HEAD)
-    song_title_length = ReadBytesToDec(handle, 2)
-    
-    --song title
-    local song_title = ""
-    SkipBytes(handle, FILENAME_OFFSET - HEAD)
-    for i=1, song_title_length do
-        local char = read(handle)
-        song_title = song_title .. string.char(char)
+    if ReadShort(handle) ~= 0 then
+        handle.close()
+        error("File version is invalid")
     end
-    header_info.song_title = song_title
-
-    SkipBytes(handle, OP_LENGTH)
+    header_info.version                     = ReadByte(handle)
+    header_info.vanilla_instrument_count    = ReadByte(handle)
+    header_info.song_length                 = ReadShort(handle)
+    header_info.layer_count                 = ReadShort(handle)
+    header_info.song_name                   = ReadString(handle)
+    header_info.song_author                 = ReadString(handle)
+    header_info.song_original_author        = ReadString(handle)
+    header_info.song_description            = ReadString(handle)
+    header_info.song_tempo                  = ReadShort(handle)
+    header_info.auto_saving                 = ReadByte(handle)
+    header_info.auto_saving_duration        = ReadByte(handle)
+    header_info.time_signature              = ReadByte(handle)
+    header_info.minute_spent                = ReadInt(handle)
+    header_info.left_clicks                 = ReadInt(handle)
+    header_info.right_clicks                = ReadInt(handle)
+    header_info.note_blocks_added           = ReadInt(handle)
+    header_info.note_blocks_removed         = ReadInt(handle)
+    header_info.schematic_file_name         = ReadString(handle)
+    header_info.loop_state                  = ReadByte(handle)
+    header_info.max_loop_count              = ReadByte(handle)
+    header_info.loop_start_tick             = ReadShort(handle)
     return header_info
 
 end
 
-local function GetNote(handle)
-    local note = {}
-    for i=1, OP_LENGTH do
-        local byte = read(handle)
-        table.insert(note, byte)
-    end
-    return note
-end
-
-local function GetJumpOp(handle)
-    local OpCode = {}
-    
-    local tick = ReadBytesToDec(handle, 2)
-    OpCode.tick_jump = tick
-
-    local layer = ReadBytesToDec(handle, 2)
-    OpCode.layer_jump = layer
-
-    if tick == 0 and layer == 0 then
-        return nil
-    end
-    return OpCode
-end
-
---THE HEAD NEEDS TO BE PLACED AT THE BACK OF A NOTE
---Not ensuring that will result in a undefined behavior
---#TODO return the correct layer jump
---return the JumpOp to the next note while moving the head to it
---local function FindNextNote(handle)
---    local sum = 0
---    for i=1, LAYER_OFFSET do
---        local byte = read(handle)
---        sum = sum + byte
---        if i == LAYER_OFFSET and sum >= 1 then
---            return {0, byte}
---       end
---    end
---    return GetJumpOp(handle)
---end
-
-local function GetLayerJump(handle)
-    local Op = {tick_jump = 0, layer_jump = 0}
-    SkipBytes(handle, LAYER_OFFSET / 2)
-    Op.layer_jump = ReadBytesToDec(handle, 2)
-
-    if Op.layer_jump == 0 then return nil end
-    return Op
-end
-
-local function GetNextTick(handle)
+local function GetNotes(handle)
     local notes = {}
+    local current_tick = -1
     while true do
-        table.insert(notes, GetNote(handle))
-        local Op = GetLayerJump(handle)
-        if Op == nil then
-            return notes
-        end
-    end
-end
-
-local function parse_song(handle, header_info, starting_tick)
-    local parsed_song = {}
-    local tick = starting_tick
-    while true do
-        local section = GetNextTick(handle)
-        table.insert(parsed_song, {tick, section})
+        local tick_jump = ReadShort(handle)
+        if tick_jump == 0 then break end
+        current_tick = current_tick + tick_jump
         
-        if tick == header_info.tick_length then
-            return parsed_song
+        notes[current_tick] = {}
+        local layer = -1
+        while true do
+            local layer_jump = ReadShort(handle)
+            if layer_jump == 0 then break end
+            layer = layer + layer_jump
+
+            local note = {}
+            note.instrument  = ReadByte(handle)
+            note.key         = ReadByte(handle)
+            note.velocity    = ReadByte(handle)
+            note.panning     = ReadByte(handle)
+            note.pitch       = ReadShort(handle)
+
+            notes[current_tick][layer] = note
         end
+        
+    end
+    return notes
+end
+
+local function GetLayers(handle, header)
+    local layers = {}
+    for i=0, header.layer_count -1 do
+        local layer = {}
+        
+        layer.layer_name    = ReadString(handle)
+        layer.layer_lock    = ReadByte(handle)
+        layer.layer_volume = ReadByte(handle)
+        layer.layer_stereo  = ReadByte(handle)
+
+        layers[i] = layer
+    end
+    return layers
+end
+
+local function PlayNote(note, layer, instruments, noteblock)
+    --will have to do something about stereo
     
-        local Op = GetJumpOp(handle)
-        tick = tick + Op.tick_jump
+    -- 0 is 2 blocks right, 100 is center, 200 is 2 blocks left.
+    
+    -- Pitch source https://minecraft.gamepedia.com/Note_Block
+    noteblock.PlaySound(instruments[tostring(note.instrument)], math.pow(2, (note.pitch - 12) / 12), layer.layer_volume, 0, 0, 0)
+end
+
+local function PlayTick(tick, layers, instruments, noteblock)
+    for layer, note in pairs(tick) do
+        PlayNote(note, layers[layer], instruments, noteblock)
     end
 end
 
-local sTick = 0
 
-local formatted_song = {}
+local function PlaySong(song, noteblock)
+    local clock = os.clock()
+    local tempo = song.header.song_tempo / 100 -- ticks per second
+    local delta_time = 0
+    local current_tick = 0
+    while true do
+        local new_clock = os.clock()
+        delta_time = delta_time + (new_clock - clock)
 
-local song = fs.open("crawl.nbs", "rb")
-local header_info = GetHeaderInfo(song)
-print(header_info.tick_length)
-print(header_info.song_title)
+        while delta_time >= (1 / tempo) do
+            delta_time = delta_time - (1 / tempo)
+            
+            if song.notes[current_tick] then
+                print(current_tick)
+                PlayTick(song.notes[current_tick], song.layers, song.instruments, noteblock)
+            end
 
-local Op = GetJumpOp(song)
-local pSong = parse_song(song, header_info, Op.tick_jump -1)
-
-for i=1, #pSong do
-    print("tick: " .. pSong[i][1] .. " found " .. #pSong[i][2] .. " notes.")
+            current_tick = current_tick + 1
+        end
+        if current_tick > song.header.song_length then
+            break
+        end
+        sleep(0)
+        clock = new_clock
+    end
 end
+
+local noteblock = peripheral.find("note_block")
+if not noteblock then
+    error("No noteblock detected")
+end
+
+local json = require("json")
+local arg = {...}
+local song = {}
+
+local song_handle = fs.open(arg[1], "rb")
+local instruments_handle = fs.open("instrument_const.json", "r")
+
+song.header = GetHeaderInfo(song_handle)
+song.notes = GetNotes(song_handle)
+song.layers = GetLayers(song_handle, song.header)
+song_handle.close()
+
+song.instruments = json.decode(instruments_handle.readAll())
+instruments_handle.close()
+
+PlaySong(song, noteblock)
