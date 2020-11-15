@@ -180,7 +180,6 @@ local function PlaySong(song, noteblock)
             delta_time = delta_time - (1 / tempo)
             
             if song.notes[current_tick] then
-                print(current_tick)
                 PlayTick(song.notes[current_tick], song.layers, song.instruments, noteblock)
             end
 
