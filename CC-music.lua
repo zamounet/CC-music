@@ -1,4 +1,4 @@
-edtilocal currentPath = "CC-music/"
+local currentPath = "CC-music/"
 
 do
 	local requireCache = {}
